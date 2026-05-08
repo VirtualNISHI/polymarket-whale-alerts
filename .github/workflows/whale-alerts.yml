@@ -1,0 +1,66 @@
+name: whale-alerts
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub may delay cron-triggered workflows by up to
+    # ~15 min during peak load — that's fine for this use case.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: whale-alerts
+  # If a previous run is still going when the next tick fires, queue rather
+  # than cancel — cancelling mid-send risks losing an alert.
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Restore SQLite state from latest cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: whale-alerts-db-${{ github.run_id }}
+          restore-keys: |
+            whale-alerts-db-
+
+      - name: Run
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Reserved for future X / Gemini integration. Loaded from secrets so
+          # the integration can be wired up without changing the workflow.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          LOG_LEVEL: INFO
+          DB_PATH: ./data/whale_alerts.db
+          POLYMARKET_USER_AGENT: polymarket-whale-alerts/0.1 (+github-actions)
+        run: |
+          python -m src.db init
+          python scripts/run.py
+
+      - name: Save SQLite state to cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/
+          key: whale-alerts-db-${{ github.run_id }}

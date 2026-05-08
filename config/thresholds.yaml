@@ -1,0 +1,28 @@
+screening:
+  min_volume_usd: 100000
+  top_n_markets: 50
+  excluded_categories: []
+
+large_trade:
+  min_trade_usd: 50000
+  min_trade_usd_hourly: 100000
+
+orderbook_skew:
+  skew_ratio: 3.0
+  prob_change_1h: 0.05
+  min_volume_1h: 20000
+
+# Polymarket-internal classification (PnL is aggregated over a wallet's open
+# Polymarket positions only — narrower than Nansen cross-protocol, so the
+# numbers here are smaller than the original SPEC's draft).
+wallet_classification:
+  smart_trader:
+    min_cumulative_pnl_usd: 100000
+    min_win_rate: 0.60
+  whale:
+    min_cumulative_volume_usd: 500000
+  new:
+    max_trade_count: 10
+
+cache:
+  wallet_ttl_seconds: 86400
