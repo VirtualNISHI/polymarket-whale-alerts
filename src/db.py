@@ -68,7 +68,14 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, detect_types=sqlite3.PARSE_DECLTYPES)
+        # PARSE_DECLTYPES was previously enabled, which triggered the
+        # deprecated ``convert_timestamp`` adapter on every TIMESTAMP column
+        # read. That adapter only accepts the legacy ``YYYY-MM-DD HH:MM:SS``
+        # format and crashes with "not enough values to unpack" on any ISO
+        # value that uses a ``T`` separator (which is what we store). We
+        # disable the auto-converter and parse timestamps explicitly in the
+        # ``get_*`` helpers via ``datetime.fromisoformat``.
+        conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
         try:
