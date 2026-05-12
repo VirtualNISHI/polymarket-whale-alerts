@@ -18,6 +18,7 @@ from src.detector import (
 )
 from src.discord_client import DiscordClient
 from src.formatter import format_large_trade_embed, format_orderbook_skew_embed
+from src.nansen_client import NansenClient
 from src.polymarket_client import PolymarketClient
 
 log = logging.getLogger(__name__)
@@ -64,6 +65,59 @@ def _market_delta_24h(m: dict[str, Any]) -> float:
 
 def _market_delta_1h(m: dict[str, Any]) -> float:
     return _float_field(m, ("probability_change_1h", "oneHourPriceChange"))
+
+
+# Process-local cache for Nansen results (single-run only — short TTL is fine
+# because the bot runs as a frequent cron and Nansen data changes slowly).
+_nansen_run_cache: dict[str, dict[str, Any] | None] = {}
+
+
+def _fetch_nansen_context(
+    nansen: NansenClient,
+    address: str,
+    *,
+    lookback_days: int,
+) -> dict[str, Any] | None:
+    """Best-effort enrichment via Nansen. Returns None on failure or when the
+    client is disabled (no API key). Per Nansen ToS, only ATTRIBUTION-tier or
+    FREE-tier data is fetched here — no smart-money labels, no leaderboards.
+    """
+    if not nansen.enabled:
+        return None
+    if address in _nansen_run_cache:
+        return _nansen_run_cache[address]
+    date_to = datetime.now(timezone.utc).date()
+    date_from = date_to - timedelta(days=lookback_days)
+    pnl = nansen.address_pnl_summary(
+        address,
+        chain="ethereum",
+        date_from=date_from.isoformat(),
+        date_to=date_to.isoformat(),
+    )
+    pm_summary = nansen.prediction_market_address_summary(address)
+    bal = nansen.address_current_balance(address, chain="ethereum", per_page=10)
+    if not (pnl or pm_summary or bal):
+        _nansen_run_cache[address] = None
+        return None
+    # Compute total visible portfolio value (top tokens) for context.
+    portfolio_usd: float | None = None
+    if bal and bal.get("data"):
+        portfolio_usd = sum(
+            float(item.get("value_usd") or 0.0) for item in bal["data"]
+        )
+    ctx = {
+        "onchain_pnl_usd": (pnl or {}).get("realized_pnl_usd"),
+        "onchain_win_rate": (pnl or {}).get("win_rate"),
+        "onchain_trade_count": (pnl or {}).get("traded_times"),
+        "pm_total_pnl_usd": (pm_summary or {}).get("total_pnl_usd"),
+        "pm_win_rate": (pm_summary or {}).get("win_rate"),
+        "pm_markets_traded": (pm_summary or {}).get("markets_traded"),
+        "pm_wallet_age_days": (pm_summary or {}).get("wallet_age_days"),
+        "portfolio_value_usd": portfolio_usd,
+        "lookback_days": lookback_days,
+    }
+    _nansen_run_cache[address] = ctx
+    return ctx
 
 
 async def _classify_with_cache(
@@ -120,6 +174,8 @@ async def _process_market(
     since: datetime,
     dry_run: bool,
     summary: Summary,
+    nansen: NansenClient,
+    nansen_lookback_days: int,
 ) -> None:
     market_id = _market_id(market)
     if not market_id:
@@ -160,6 +216,14 @@ async def _process_market(
         wallet_tag, wallet_summary = await _classify_with_cache(
             db=db, client=client, address=trade.wallet_address, thresholds=thresholds
         )
+        # Best-effort Nansen enrichment; runs in a thread so it does not block
+        # the event loop (the underlying httpx call is sync).
+        nansen_ctx = await asyncio.to_thread(
+            _fetch_nansen_context,
+            nansen,
+            trade.wallet_address,
+            lookback_days=nansen_lookback_days,
+        )
         embed = format_large_trade_embed(
             market=market,
             trade=trade,
@@ -167,6 +231,7 @@ async def _process_market(
             wallet_summary=wallet_summary,
             current_probability=_market_probability(market),
             delta_24h=_market_delta_24h(market),
+            nansen_context=nansen_ctx,
         )
         if dry_run:
             log.info("[dry-run] large_trade embed: %s", json.dumps(embed, ensure_ascii=False))
@@ -240,6 +305,7 @@ async def run_once(
 
     summary = Summary()
 
+    nansen = NansenClient(api_key=settings.nansen_api_key)
     async with PolymarketClient(
         user_agent=settings.polymarket_user_agent
     ) as client, DiscordClient(settings.discord_webhook_url) as discord:
@@ -267,11 +333,14 @@ async def run_once(
                     since=since,
                     dry_run=dry_run,
                     summary=summary,
+                    nansen=nansen,
+                    nansen_lookback_days=settings.nansen_pnl_lookback_days,
                 )
             except Exception:
                 log.exception("Market %s processing failed", _market_id(market))
                 summary.skipped += 1
 
+    nansen.close()
     if not dry_run:
         db.set_last_polled_at(JOB_NAME, now)
 

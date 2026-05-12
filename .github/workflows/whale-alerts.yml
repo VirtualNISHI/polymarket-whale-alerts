@@ -51,6 +51,10 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          # Nansen on-chain enrichment (optional). When the secret is empty
+          # the bot falls back to its original Polymarket-only behaviour.
+          NANSEN_API_KEY: ${{ secrets.NANSEN_API_KEY }}
+          NANSEN_PNL_LOOKBACK_DAYS: "180"
           LOG_LEVEL: INFO
           DB_PATH: ./data/whale_alerts.db
           POLYMARKET_USER_AGENT: polymarket-whale-alerts/0.1 (+github-actions)

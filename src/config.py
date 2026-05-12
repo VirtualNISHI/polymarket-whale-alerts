@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     db_path: str = "./data/whale_alerts.db"
     dry_run: bool = False
     polymarket_user_agent: str = "polymarket-whale-alerts/0.1"
+    # Optional Nansen integration. If empty, Nansen calls are skipped and
+    # embeds simply omit the on-chain context fields.
+    nansen_api_key: str = ""
+    # Lookback for Nansen on-chain PnL aggregation (days).
+    nansen_pnl_lookback_days: int = 180
 
 
 class ScreeningConfig(BaseModel):
